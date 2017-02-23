@@ -95,6 +95,8 @@ class EmptyOptions(unittest.TestCase):
             fail = True
         sys.stdout = stdout_temp
 
+        os.remove('testscour_temp.svg')
+
         self.assertEqual(fail, False,
                          'Exception when calling "start" with empty options object')
 
@@ -2433,6 +2435,11 @@ class EmbedRasters(unittest.TestCase):
     def _ping(host):
         import os
         import platform
+
+        # work around https://github.com/travis-ci/travis-ci/issues/3080 as pypy throws if 'ping' can't be executed
+        import distutils.spawn
+        if not distutils.spawn.find_executable('ping'):
+            return -1
 
         system = platform.system().lower()
         ping_count = '-n' if system == 'windows' else '-c'
