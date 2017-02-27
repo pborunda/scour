@@ -2533,51 +2533,65 @@ def cleanPolyline(elem, options):
     elem.setAttribute('points', scourCoordinates(pts, options, True))
 
 
+def controlPoints(cmd, data):
+    """
+       Checks if there are control points in the path
+
+       Returns False if there aren't any
+       Returns a list of bools set to True for coordinates in the path data which are control points
+    """
+    cmd = cmd.lower()
+    if cmd in ['c', 's', 'q']:
+        indices = range(0, len(data))
+        if cmd == 'c':  # c: (x1 y1 x2 y2 x y)+
+            return [(index % 6) < 4 for index in indices]
+        elif cmd in ['s', 'q']:  # s: (x2 y2 x y)+   q: (x1 y1 x y)+
+            return [(index % 4) < 2 for index in indices]
+
+    return False
+
+
 def serializePath(pathObj, options):
     """
        Reserializes the path data with some cleanups.
     """
     # elliptical arc commands must have comma/wsp separating the coordinates
     # this fixes an issue outlined in Fix https://bugs.launchpad.net/scour/+bug/412754
-    return ''.join([cmd + scourCoordinates(data, options, (cmd == 'a'), cmd) for cmd, data in pathObj])
+    return ''.join([cmd + scourCoordinates(data, options, reduce_precision=controlPoints(cmd, data))
+                    for cmd, data in pathObj])
 
 
 def serializeTransform(transformObj):
     """
        Reserializes the transform data with some cleanups.
     """
-    return ' '.join(
-        [command + '(' + ' '.join(
-           [scourUnitlessLength(number) for number in numbers]
-        ) + ')'
-            for command, numbers in transformObj]
-    )
+    return ' '.join([command + '(' + ' '.join([scourUnitlessLength(number) for number in numbers]) + ')'
+                     for command, numbers in transformObj])
 
 
-def scourCoordinates(data, options, forceCommaWsp=False, cmd=''):
+def scourCoordinates(data, options, force_whitespace=False, reduce_precision=False):
     """
        Serializes coordinate data with some cleanups:
           - removes all trailing zeros after the decimal
           - integerize coordinates if possible
           - removes extraneous whitespace
-          - adds spaces between values in a subcommand if required (or if forceCommaWsp is True)
+          - adds spaces between values in a subcommand if required (or if force_whitespace is True)
     """
     if data is not None:
         newData = []
         c = 0
         previousCoord = ''
         for coord in data:
-            cp = ((cmd == 'c' and (c % 6) < 4) or (cmd == 's' and (c % 4) < 2))
+            cp = reduce_precision[c] if isinstance(reduce_precision, list) else reduce_precision
             scouredCoord = scourUnitlessLength(coord,
-                                               needsRendererWorkaround=options.renderer_workaround,
-                                               isControlPoint=cp)
-            # only need the comma if the current number starts with a digit
-            # (numbers can start with - without needing a comma before)
-            # or if forceCommaWsp is True
-            # or if this number starts with a dot and the previous number
-            #   had *no* dot or exponent (so we can go like -5.5.5 for -5.5,0.5
-            #   and 4e4.5 for 40000,0.5)
-            if c > 0 and (forceCommaWsp
+                                               renderer_workaround=options.renderer_workaround,
+                                               reduce_precision=cp)
+            # don't output a space if this number starts with a dot (.) or minus sign (-); we only need a space if
+            #   - this number starts with a digit
+            #   - this number starts with a dot but the previous number had *no* dot or exponent
+            #     i.e. '1.3 0.5' -> '1.3.5' or '1e3 0.5' -> '1e3.5' is fine but '123 0.5' -> '123.5' is obviously not
+            #   - 'force_whitespace' is explicitly set to 'True'
+            if c > 0 and (force_whitespace
                           or scouredCoord[0].isdigit()
                           or (scouredCoord[0] == '.' and not ('.' in previousCoord or 'e' in previousCoord))
                           ):
@@ -2588,13 +2602,11 @@ def scourCoordinates(data, options, forceCommaWsp=False, cmd=''):
             previousCoord = scouredCoord
             c += 1
 
-        # What we need to do to work around GNOME bugs 548494, 563933 and
-        # 620565, which are being fixed and unfixed in Ubuntu, is
-        # to make sure that a dot doesn't immediately follow a command
-        # (so 'h50' and 'h0.5' are allowed, but not 'h.5').
-        # Then, we need to add a space character after any coordinates
-        # having an 'e' (scientific notation), so as to have the exponent
-        # separate from the next number.
+        # What we need to do to work around GNOME bugs 548494, 563933 and 620565, is to make sure that a dot doesn't
+        # immediately follow a command  (so 'h50' and 'h0.5' are allowed, but not 'h.5').
+        # Then, we need to add a space character after any coordinates  having an 'e' (scientific notation),
+        # so as to have the exponent separate from the next number.
+        # TODO: Check whether this is still required (bugs all marked as fixed, might be time to phase it out)
         if options.renderer_workaround:
             if len(newData) > 0:
                 for i in range(1, len(newData)):
@@ -2616,7 +2628,7 @@ def scourLength(length):
     return scourUnitlessLength(length.value) + Unit.str(length.units)
 
 
-def scourUnitlessLength(length, needsRendererWorkaround=False, isControlPoint=False):  # length is of a numeric type
+def scourUnitlessLength(length, renderer_workaround=False, reduce_precision=False):  # length is of a numeric type
     """
     Scours the numeric part of a length only. Does not accept units.
 
@@ -2629,11 +2641,10 @@ def scourUnitlessLength(length, needsRendererWorkaround=False, isControlPoint=Fa
 
     # reduce numeric precision
     # plus() corresponds to the unary prefix plus operator and applies context precision and rounding
-    sContext = scouringContext
-    if(isControlPoint):
-        sContext = scouringContextC
-
-    length = sContext.plus(length)
+    if reduce_precision:
+        length = scouringContextC.plus(length)
+    else:
+        length = scouringContext.plus(length)
 
     # remove trailing zeroes as we do not care for significance
     intLength = length.to_integral_value()
@@ -2647,7 +2658,7 @@ def scourUnitlessLength(length, needsRendererWorkaround=False, isControlPoint=Fa
     # (e.g. 123.4 should become 123, not 120 or even 100)
     nonsci = '{0:f}'.format(length)
     nonsci = '{0:f}'.format(initial_length.quantize(Decimal(nonsci)))
-    if not needsRendererWorkaround:
+    if not renderer_workaround:
         if len(nonsci) > 2 and nonsci[:2] == '0.':
             nonsci = nonsci[1:]  # remove the 0, leave the dot
         elif len(nonsci) > 3 and nonsci[:3] == '-0.':
@@ -3003,7 +3014,7 @@ def embedRasters(element, options):
             except Exception as e:
                 print("WARNING: Could not open file '" + href + "' for embedding. "
                       "The raster image will be kept as a reference but might be invalid. "
-                      "(Exception details: " + str(e) + ")", file=sys.stderr)
+                      "(Exception details: " + str(e) + ")", file=options.ensure_value("stdout", sys.stdout))
                 rasterdata = ''
             finally:
                 # always restore initial working directory if we changed it above
@@ -3263,22 +3274,17 @@ def scourString(in_string, options=None):
     # sanitize options (take missing attributes from defaults, discard unknown attributes)
     options = sanitizeOptions(options)
 
-    # create decimal context with reduced precision for scouring numbers
+    # default or invalid value
+    if(options.cdigits < 0):
+        options.cdigits = options.digits
+
+    # create decimal contexts with reduced precision for scouring numbers
     # calculations should be done in the default context (precision defaults to 28 significant digits)
     # to minimize errors
     global scouringContext
-    global scouringContextC
-    if(options.cdigits < 0):
-        # cdigits is negative value so use digits instead
-        options.cdigits = options.digits
-
+    global scouringContextC  # even more reduced precision for control points
     scouringContext = Context(prec=options.digits)
-
-    # cdigits cannot have higher precision, limit to digits
-    if(options.cdigits < options.digits):
-        scouringContextC = Context(prec=options.cdigits)
-    else:
-        scouringContextC = scouringContext
+    scouringContextC = Context(prec=options.cdigits)
 
     # globals for tracking statistics
     # TODO: get rid of these globals...
@@ -3597,12 +3603,16 @@ _options_parser = optparse.OptionParser(
     formatter=HeaderedFormatter(max_help_position=33),
     version=VER)
 
+# legacy options (kept around for backwards compatibility, should not be used in new code)
+_options_parser.add_option("-p", action="store", type=int, dest="digits", help=optparse.SUPPRESS_HELP)
+
+# general options
 _options_parser.add_option("-q", "--quiet",
                            action="store_true", dest="quiet", default=False,
                            help="suppress non-error output")
 _options_parser.add_option("-v", "--verbose",
                            action="store_true", dest="verbose", default=False,
-                           help="verbose output (optimization statistics, etc.)")
+                           help="verbose output (statistics, etc.)")
 _options_parser.add_option("-i",
                            action="store", dest="infilename", metavar="INPUT.SVG",
                            help="alternative way to specify input filename")
@@ -3611,15 +3621,16 @@ _options_parser.add_option("-o",
                            help="alternative way to specify output filename")
 
 _option_group_optimization = optparse.OptionGroup(_options_parser, "Optimization")
-_option_group_optimization.add_option("-p", "--set-precision",
+_option_group_optimization.add_option("--set-precision",
                                       action="store", type=int, dest="digits", default=5, metavar="NUM",
                                       help="set number of significant digits (default: %default)")
-_option_group_optimization.add_option("-c", "--set-c-precision",
+_option_group_optimization.add_option("--set-c-precision",
                                       action="store", type=int, dest="cdigits", default=-1, metavar="NUM",
-                                      help="set no. of sig. digits (path [c/s] control points) (default: %default)")
+                                      help="set number of significant digits for control points "
+                                           "(default: same as '--set-precision')")
 _option_group_optimization.add_option("--disable-simplify-colors",
                                       action="store_false", dest="simple_colors", default=True,
-                                      help="won't convert all colors to #RRGGBB format")
+                                      help="won't convert colors to #RRGGBB format")
 _option_group_optimization.add_option("--disable-style-to-xml",
                                       action="store_false", dest="style_to_xml", default=True,
                                       help="won't convert styles into XML attributes")
@@ -3712,8 +3723,8 @@ _options_parser.add_option_group(_option_group_ids)
 _option_group_compatibility = optparse.OptionGroup(_options_parser, "SVG compatibility checks")
 _option_group_compatibility.add_option("--error-on-flowtext",
                                        action="store_true", dest="error_on_flowtext", default=False,
-                                       help="If the input SVG uses non-standard flowing text exit with error. "
-                                            "Otherwise only warn.")
+                                       help="exit with error if the input SVG uses non-standard flowing text "
+                                            "(only warn by default)")
 _options_parser.add_option_group(_option_group_compatibility)
 
 
@@ -3727,8 +3738,12 @@ def parse_args(args=None, ignore_additional_args=False):
             options.outfilename = rargs.pop(0)
         if not ignore_additional_args and rargs:
             _options_parser.error("Additional arguments not handled: %r, see --help" % rargs)
-    if options.digits < 0:
-        _options_parser.error("Can't have negative significant digits, see --help")
+    if options.digits < 1:
+        _options_parser.error("Number of significant digits has to be larger than zero, see --help")
+    if options.cdigits > options.digits:
+        options.cdigits = -1
+        print("WARNING: The value for '--set-c-precision' should be lower than the value for '--set-precision'. "
+              "Number of significant digits for control points reset to defsault value, see --help", file=sys.stderr)
     if options.indent_type not in ['tab', 'space', 'none']:
         _options_parser.error("Invalid value for --indent, see --help")
     if options.indent_depth < 0:
