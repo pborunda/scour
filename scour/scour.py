@@ -2643,8 +2643,16 @@ def scourUnitlessLength(length, renderer_workaround=False, reduce_precision=Fals
     # plus() corresponds to the unary prefix plus operator and applies context precision and rounding
     if reduce_precision:
         length = scouringContextC.plus(length)
+        maxDecimalPlaces = scourMaxDecimalPlacesC
     else:
         length = scouringContext.plus(length)
+        maxDecimalPlaces = scourMaxDecimalPlaces
+
+    # trim to max decimal places
+    if maxDecimalPlaces >= 0:
+        length = length.scaleb(maxDecimalPlaces)
+        length = getcontext().create_decimal(str(int(round(length))))
+        length = length.scaleb(-maxDecimalPlaces)
 
     # remove trailing zeroes as we do not care for significance
     intLength = length.to_integral_value()
@@ -3278,13 +3286,20 @@ def scourString(in_string, options=None):
     if(options.cdigits < 0):
         options.cdigits = options.digits
 
+    if(options.cdecimalpoints < 0):
+        options.cdecimalpoints = options.decimalpoints
+
     # create decimal contexts with reduced precision for scouring numbers
     # calculations should be done in the default context (precision defaults to 28 significant digits)
     # to minimize errors
     global scouringContext
     global scouringContextC  # even more reduced precision for control points
+    global scourMaxDecimalPlaces
+    global scourMaxDecimalPlacesC
     scouringContext = Context(prec=options.digits)
     scouringContextC = Context(prec=options.cdigits)
+    scourMaxDecimalPlaces = options.decimalpoints
+    scourMaxDecimalPlacesC = options.cdecimalpoints
 
     # globals for tracking statistics
     # TODO: get rid of these globals...
@@ -3628,6 +3643,13 @@ _option_group_optimization.add_option("--set-c-precision",
                                       action="store", type=int, dest="cdigits", default=-1, metavar="NUM",
                                       help="set number of significant digits for control points "
                                            "(default: same as '--set-precision')")
+_option_group_optimization.add_option("--set-max-decimal-points",
+                                      action="store", type=int, dest="decimalpoints", default=-1, metavar="NUM",
+                                      help="set maximum digits right of decimal point (default: unset)")
+_option_group_optimization.add_option("--set-c-max-decimal-points",
+                                      action="store", type=int, dest="cdecimalpoints", default=-1, metavar="NUM",
+                                      help="set maximum digits right of decimal point for control points "
+                                           "(default: same as '--set-max-decimal-points')")
 _option_group_optimization.add_option("--disable-simplify-colors",
                                       action="store_false", dest="simple_colors", default=True,
                                       help="won't convert colors to #RRGGBB format")
@@ -3743,7 +3765,12 @@ def parse_args(args=None, ignore_additional_args=False):
     if options.cdigits > options.digits:
         options.cdigits = -1
         print("WARNING: The value for '--set-c-precision' should be lower than the value for '--set-precision'. "
-              "Number of significant digits for control points reset to defsault value, see --help", file=sys.stderr)
+              "Number of significant digits for control points reset to default value, see --help", file=sys.stderr)
+    if options.cdecimalpoints > options.decimalpoints:
+        options.cdecimalpoints = -1
+        print("WARNING: The value for '--set-c-max-decimal-points' should be lower than the value for "
+              "'--set-max-decimal-points'. Number of decimal points for control points reset to "
+              "default value, see --help", file=sys.stderr)
     if options.indent_type not in ['tab', 'space', 'none']:
         _options_parser.error("Invalid value for --indent, see --help")
     if options.indent_depth < 0:
