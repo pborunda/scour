@@ -3766,7 +3766,7 @@ def parse_args(args=None, ignore_additional_args=False):
         options.cdigits = -1
         print("WARNING: The value for '--set-c-precision' should be lower than the value for '--set-precision'. "
               "Number of significant digits for control points reset to default value, see --help", file=sys.stderr)
-    if options.cdecimalpoints > options.decimalpoints:
+    if (options.decimalpoints >= 0) and (options.cdecimalpoints > options.decimalpoints):
         options.cdecimalpoints = -1
         print("WARNING: The value for '--set-c-max-decimal-points' should be lower than the value for "
               "'--set-max-decimal-points'. Number of decimal points for control points reset to "
