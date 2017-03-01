@@ -3636,6 +3636,9 @@ _options_parser.add_option("-o",
                            help="alternative way to specify output filename")
 
 _option_group_optimization = optparse.OptionGroup(_options_parser, "Optimization")
+_option_group_optimization.add_option("--num-passes",
+                                      action="store", type=int, dest="numpasses", default=2, metavar="NUM",
+                                      help="number of times to scour svg (default: %default)")
 _option_group_optimization.add_option("--set-precision",
                                       action="store", type=int, dest="digits", default=5, metavar="NUM",
                                       help="set number of significant digits (default: %default)")
@@ -3861,7 +3864,11 @@ def start(options, input, output):
 
     # do the work
     in_string = input.read()
-    out_string = scourString(in_string, options).encode("UTF-8")
+    out_string = in_string
+    in_string_pass = out_string
+    for i in range(options.numpasses):
+        out_string = scourString(in_string_pass, options).encode("UTF-8")
+        in_string_pass = out_string
     output.write(out_string)
 
     # Close input and output files (but do not attempt to close stdin/stdout!)
